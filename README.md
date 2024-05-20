@@ -151,3 +151,116 @@ Summary
 	•	Script: Handles downloading, saving, posting, and retrying.
 	•	Dockerization: Dockerfile to containerize the application.
 	•	Deployment: Build, push, and deploy the container to OpenShift.
+
+
+
+ 1. Python Script (service.py)
+
+This script will hit an API, download a zipped file, and then post it to another endpoint. It will retry if the post fails.
+
+import requests
+import os
+import time
+
+# Configuration from environment variables
+SOURCE_URL = os.getenv('SOURCE_URL', 'http://example.com/source.zip')
+DESTINATION_URL = os.getenv('DESTINATION_URL', 'http://example.com/endpoint')
+RETRY_INTERVAL = int(os.getenv('RETRY_INTERVAL', '120'))  # Default to 2 minutes
+DOWNLOAD_DIR = '/tmp/downloads'
+
+# Ensure download directory exists
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+def download_file():
+    response = requests.get(SOURCE_URL)
+    if response.status_code == 200:
+        file_path = os.path.join(DOWNLOAD_DIR, 'source.zip')
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
+        return file_path
+    else:
+        print(f"Failed to download file: {response.status_code}")
+        return None
+
+def post_file(file_path):
+    with open(file_path, 'rb') as f:
+        files = {'file': f}
+        response = requests.post(DESTINATION_URL, files=files)
+        return response.status_code == 200
+
+def process_file():
+    file_path = download_file()
+    if file_path:
+        success = post_file(file_path)
+        if success:
+            os.remove(file_path)
+            print("File posted successfully and deleted.")
+        else:
+            print("Failed to post file. Will retry in 2 minutes.")
+            retry_post(file_path)
+
+def retry_post(file_path):
+    while True:
+        success = post_file(file_path)
+        if success:
+            os.remove(file_path)
+            print("File posted successfully and deleted.")
+            break
+        else:
+            print("Retrying to post file...")
+            time.sleep(RETRY_INTERVAL)
+
+if __name__ == "__main__":
+    process_file()
+
+2. Dockerfile
+
+This Dockerfile will package the Python script into a Docker container.
+
+# Use the official Python image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements.txt and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the service script
+COPY service.py .
+
+# Run the service script
+CMD ["python", "service.py"]
+
+3. Requirements File (requirements.txt)
+
+Create a requirements.txt file to specify the required Python packages.
+
+requests
+
+4. CronJob YAML (cronjob.yaml)
+
+This YAML file defines the CronJob to run the containerized script at specified intervals.
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: my-cronjob
+spec:
+  schedule: "*/10 * * * *"  # Runs every 10 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: my-service
+            image: <registry>/<namespace>/my-service:latest
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: SOURCE_URL
+              value: "http://example.com/source.zip"
+            - name: DESTINATION_URL
+              value: "http://example.com/endpoint"
+            - name: RETRY_INTERVAL
+​⬤
